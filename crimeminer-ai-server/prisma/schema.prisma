@@ -1,0 +1,274 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+// User model - represents system users
+model User {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  email        String    @unique
+  passwordHash String
+  firstName    String?
+  lastName     String?
+  role         UserRole  @default(INVESTIGATOR)
+  department   String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  lastLogin    DateTime?
+  
+  // Relations
+  createdCases       Case[]       @relation("CaseCreator")
+  assignedCases      Case[]       @relation("CaseAssignee")
+  uploadedEvidence   Evidence[]   @relation("EvidenceUploader")
+  createdJobs        AnalysisJob[] @relation("JobCreator")
+  createdNotes       Note[]       @relation("NoteCreator")
+  userCaseAccess     UserCaseAccess[]
+}
+
+enum UserRole {
+  ADMIN
+  INVESTIGATOR
+  ANALYST
+}
+
+// Case model - represents an investigation case
+model Case {
+  id          String    @id @default(uuid())
+  caseNumber  String    @unique
+  title       String
+  description String?
+  status      CaseStatus @default(OPEN)
+  priority    CasePriority?
+  createdById String
+  createdBy   User      @relation("CaseCreator", fields: [createdById], references: [id])
+  assignedToId String?
+  assignedTo  User?     @relation("CaseAssignee", fields: [assignedToId], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  closedAt    DateTime?
+  
+  // Relations
+  evidence    Evidence[]
+  notes       Note[]    @relation("CaseNotes")
+  userAccess  UserCaseAccess[]
+}
+
+enum CaseStatus {
+  OPEN
+  CLOSED
+  ARCHIVED
+}
+
+enum CasePriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// User-Case access control
+model UserCaseAccess {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  caseId    String
+  case      Case     @relation(fields: [caseId], references: [id])
+  role      String
+  grantedAt DateTime @default(now())
+  expiresAt DateTime?
+  
+  @@unique([userId, caseId])
+}
+
+// Evidence model - represents a file uploaded to the system
+model Evidence {
+  id            String    @id @default(uuid())
+  caseId        String?
+  case          Case?     @relation(fields: [caseId], references: [id])
+  title         String?
+  description   String?
+  fileName      String    @default("unknown.txt")
+  filePath      String    @default("/unknown")
+  fileType      FileType  @default(OTHER)
+  fileSize      BigInt    @default(0)
+  mimeType      String?
+  hash          String?
+  uploadedById  String?
+  uploadedBy    User?     @relation("EvidenceUploader", fields: [uploadedById], references: [id])
+  uploadedAt    DateTime  @default(now())
+  processed     Boolean   @default(false)
+  processingStatus String? @default("pending")
+  metadata      Json?     @default("{}")
+  tags          String[]  @default([])
+  
+  // For backward compatibility with existing records
+  type          String?   
+  content       String?
+
+  // Relations
+  analysisJobs  AnalysisJob[]
+  analysisResults AnalysisResult[]
+  references    Reference[]
+  notes         Note[]    @relation("EvidenceNotes")
+}
+
+enum FileType {
+  AUDIO
+  VIDEO
+  TEXT
+  IMAGE
+  DOCUMENT
+  OTHER
+}
+
+// AnalysisJob model - represents a processing job
+model AnalysisJob {
+  id           String        @id @default(uuid())
+  evidenceId   String
+  evidence     Evidence      @relation(fields: [evidenceId], references: [id])
+  jobType      JobType
+  status       JobStatus     @default(QUEUED)
+  progress     Float         @default(0)
+  startedAt    DateTime?
+  completedAt  DateTime?
+  error        String?
+  createdById  String?
+  createdBy    User?         @relation("JobCreator", fields: [createdById], references: [id])
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  
+  // Relations
+  results     AnalysisResult[]
+}
+
+enum JobType {
+  TRANSCRIPTION
+  ENTITY_EXTRACTION
+  SUMMARIZATION
+  SENTIMENT_ANALYSIS
+  PATTERN_IDENTIFICATION
+  TRANSLATION
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// AnalysisResult model - represents results of an analysis job
+model AnalysisResult {
+  id           String        @id @default(uuid())
+  jobId        String
+  job          AnalysisJob   @relation(fields: [jobId], references: [id])
+  evidenceId   String
+  evidence     Evidence      @relation(fields: [evidenceId], references: [id])
+  resultType   ResultType
+  content      Json
+  confidence   Float?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  
+  // Relations
+  references   Reference[]
+  entityOccurrences EntityOccurrence[]
+  notes        Note[]    @relation("ResultNotes")
+}
+
+enum ResultType {
+  ENTITY
+  SUMMARY
+  SENTIMENT
+  PATTERN
+  TRANSCRIPTION
+}
+
+// Reference model - represents a specific location in a source file
+model Reference {
+  id             String        @id @default(uuid())
+  resultId       String?
+  result         AnalysisResult? @relation(fields: [resultId], references: [id])
+  evidenceId     String
+  evidence       Evidence      @relation(fields: [evidenceId], references: [id])
+  referenceType  String        @default("TIMESTAMP") // Using String instead of enum for backward compatibility
+  startPosition  String        @default("0")
+  endPosition    String?
+  context        String
+  confidence     Float
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  
+  // For backward compatibility with existing records
+  location       String?
+
+  // Relations
+  entityOccurrences EntityOccurrence[]
+}
+
+// Entity model - represents named entities extracted from evidence
+model Entity {
+  id           String        @id @default(uuid())
+  name         String
+  entityType   EntityType
+  aliases      String[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  
+  // Relations
+  occurrences  EntityOccurrence[]
+}
+
+enum EntityType {
+  PERSON
+  LOCATION
+  ORGANIZATION
+  DATE
+  TIME
+  WEAPON
+  VEHICLE
+  OTHER
+}
+
+// EntityOccurrence model - represents an occurrence of an entity
+model EntityOccurrence {
+  id           String        @id @default(uuid())
+  entityId     String
+  entity       Entity        @relation(fields: [entityId], references: [id])
+  resultId     String
+  result       AnalysisResult @relation(fields: [resultId], references: [id])
+  referenceId  String
+  reference    Reference     @relation(fields: [referenceId], references: [id])
+  confidence   Float
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+// Note model - represents notes attached to cases, evidence, or analysis results
+model Note {
+  id           String        @id @default(uuid())
+  content      String
+  createdById  String
+  createdBy    User          @relation("NoteCreator", fields: [createdById], references: [id])
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  
+  // Relations to parent objects (optional)
+  caseId       String?
+  case         Case?         @relation("CaseNotes", fields: [caseId], references: [id])
+  evidenceId   String?
+  evidence     Evidence?     @relation("EvidenceNotes", fields: [evidenceId], references: [id])
+  resultId     String?
+  result       AnalysisResult? @relation("ResultNotes", fields: [resultId], references: [id])
+  
+  // Ensure a note is attached to at most one parent
+  @@check(((caseId != null) && (evidenceId == null) && (resultId == null)) || 
+          ((caseId == null) && (evidenceId != null) && (resultId == null)) || 
+          ((caseId == null) && (evidenceId == null) && (resultId != null)))
+}

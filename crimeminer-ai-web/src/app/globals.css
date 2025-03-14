@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --radius: 0.5rem;
+    
+    --background: 250, 250, 250;
+    --foreground-rgb: 0, 0, 0;
+    
+    --border: 214, 219, 230;
+    --input: 214, 219, 230;
+    --ring: 214, 219, 230;
+    
+    /* Card colors */
+    --card-background: 255, 255, 255;
+    --card-foreground: 0, 0, 0;
+    
+    /* Primary colors */
+    --primary: 37, 99, 235;
+    --primary-foreground: 255, 255, 255;
+    
+    /* Secondary colors */
+    --secondary: 240, 245, 250;
+    --secondary-foreground: 10, 30, 60;
+    
+    /* Accent colors */
+    --accent: 240, 245, 250;
+    --accent-foreground: 10, 30, 60;
+    
+    /* Muted colors */
+    --muted: 240, 240, 240;
+    --muted-foreground: 115, 115, 115;
+    
+    /* Destructive colors */
+    --destructive: 210, 40, 40;
+    --destructive-foreground: 255, 255, 255;
+  }
+
+  .dark {
+    --background: 20, 20, 30;
+    --foreground-rgb: 255, 255, 255;
+    
+    --border: 50, 55, 65;
+    --input: 50, 55, 65;
+    --ring: 70, 75, 85;
+    
+    /* Card colors */
+    --card-background: 30, 30, 40;
+    --card-foreground: 255, 255, 255;
+    
+    /* Primary colors */
+    --primary: 59, 130, 246;
+    --primary-foreground: 255, 255, 255;
+    
+    /* Secondary colors */
+    --secondary: 40, 45, 55;
+    --secondary-foreground: 230, 235, 245;
+    
+    /* Accent colors */
+    --accent: 40, 45, 55;
+    --accent-foreground: 230, 235, 245;
+    
+    /* Muted colors */
+    --muted: 30, 35, 45;
+    --muted-foreground: 150, 155, 165;
+    
+    /* Destructive colors */
+    --destructive: 230, 60, 60;
+    --destructive-foreground: 255, 255, 255;
+  }
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background));
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  
+  .text-primary {
+    color: rgb(var(--primary));
+  }
+  
+  .text-primary-foreground {
+    color: rgb(var(--primary-foreground));
+  }
+  
+  .text-muted-foreground {
+    color: rgb(var(--muted-foreground));
+  }
+  
+  .bg-card {
+    background-color: rgb(var(--card-background));
+  }
+  
+  .bg-primary {
+    background-color: rgb(var(--primary));
+  }
+} 
