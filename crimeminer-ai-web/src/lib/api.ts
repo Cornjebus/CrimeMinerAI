@@ -1,15 +1,78 @@
 import axios from 'axios';
 
-// Use environment variable for API URL with fallback
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+// We'll try multiple ports if the default one doesn't work
+const API_PORTS = [4000, 4001, 4002, 4003, 4004];
 
+// Create a function to find an available API server
+const findAvailableApiServer = async () => {
+  // First check if we have a stored port that worked previously
+  const storedPort = localStorage.getItem('api_port');
+  if (storedPort) {
+    const port = parseInt(storedPort);
+    try {
+      const response = await fetch(`http://localhost:${port}/health`, { 
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(1000) // 1 second timeout
+      });
+      if (response.ok) {
+        console.log(`Successfully connected to API server on port ${port}`);
+        return `http://localhost:${port}`;
+      }
+    } catch (error) {
+      console.log(`Stored API port ${port} is not available, trying others...`);
+    }
+  }
+
+  // Try each port in sequence
+  for (const port of API_PORTS) {
+    try {
+      console.log(`Trying to connect to API server on port ${port}...`);
+      const response = await fetch(`http://localhost:${port}/health`, { 
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(1000) // 1 second timeout
+      });
+      
+      if (response.ok) {
+        console.log(`Successfully connected to API server on port ${port}`);
+        // Store the working port for future use
+        localStorage.setItem('api_port', port.toString());
+        return `http://localhost:${port}`;
+      }
+    } catch (error) {
+      console.log(`API server not available on port ${port}, trying next port...`);
+    }
+  }
+
+  // If we get here, none of the ports worked
+  console.warn('Could not connect to any API server port');
+  return null;
+};
+
+// Start with a default URL, we'll update it when we find a working server
+let baseApiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+
+// Create the API instance
 export const api = axios.create({
-  baseURL: API_URL,
+  baseURL: baseApiUrl,
   timeout: 180000, // 180 seconds timeout (3 minutes)
   headers: {
     'Content-Type': 'application/json',
   }
 });
+
+// Function to initialize the API with a working server
+export const initApi = async () => {
+  const apiUrl = await findAvailableApiServer();
+  if (apiUrl) {
+    baseApiUrl = apiUrl;
+    api.defaults.baseURL = apiUrl;
+    console.log('API initialized with server:', apiUrl);
+    return true;
+  }
+  return false;
+};
 
 // Add request interceptor for debugging
 api.interceptors.request.use(

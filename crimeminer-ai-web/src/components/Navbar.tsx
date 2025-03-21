@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { FileText, BarChart2, FolderOpen, BookOpen } from 'lucide-react';
+import { FileText, BarChart2, FolderOpen, BookOpen, Clock } from 'lucide-react';
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -13,6 +13,7 @@ export default function Navbar() {
     { href: '/files', label: 'Files', icon: <FolderOpen className="h-5 w-5" /> },
     { href: '/analyze', label: 'Analyze', icon: <FileText className="h-5 w-5" /> },
     { href: '/references', label: 'References', icon: <BookOpen className="h-5 w-5" /> },
+    { href: '/timeline', label: 'Timeline', icon: <Clock className="h-5 w-5" /> },
   ];
   
   return (
