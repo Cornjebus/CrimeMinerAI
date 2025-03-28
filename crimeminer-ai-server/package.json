@@ -4,8 +4,12 @@
   "description": "Backend server for CrimeMiner AI",
   "main": "src/server.ts",
   "scripts": {
-    "start": "ts-node src/server.ts",
-    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "dev": "ts-node-dev --respawn --transpile-only ./src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test-ffmpeg": "node ./test-ffmpeg.js",
+    "test-whisper": "node ./test-whisper.js",
+    "test-diarization": "node ./test-diarization.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {

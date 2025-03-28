@@ -425,4 +425,190 @@ export async function prepareAudioForTranscription(
     console.error('Audio preparation error:', error);
     throw new WhisperError(`Failed to prepare audio for transcription: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+/**
+ * Implements speaker diarization by post-processing the transcript
+ * using GPT-4 to identify different speakers in the audio.
+ * @param transcription The transcription result without speaker information
+ * @param options Additional options for diarization
+ * @returns The transcription result with speaker information added
+ */
+export async function performSpeakerDiarization(
+  transcription: TranscriptionResult,
+  options: {
+    apiKey?: string; // OpenAI API key, defaults to env variable
+    speakerCount?: number; // Hint for number of speakers
+    useGPT4?: boolean; // Whether to use GPT-4 (more accurate) or GPT-3.5
+  } = {}
+): Promise<TranscriptionResult> {
+  try {
+    const apiKey = options.apiKey || OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new WhisperError('OpenAI API key not found for speaker diarization');
+    }
+
+    console.log('Performing speaker diarization with AI...');
+
+    // Prepare the prompt with transcription data
+    let prompt = `You are an audio transcription specialist. The following is a transcript of an audio recording.\n\n`;
+    prompt += `Full Transcript:\n${transcription.text}\n\n`;
+    prompt += `Now I want you to analyze this transcript and identify different speakers. `;
+    
+    if (options.speakerCount) {
+      prompt += `There are approximately ${options.speakerCount} speakers in this recording. `;
+    } else {
+      prompt += `I don't know how many speakers there are, so please identify them based on context. `;
+    }
+    
+    prompt += `Format each segment with the speaker label at the beginning of each line like "Speaker 1:", "Speaker 2:", etc.\n\n`;
+    prompt += `Here are the individual segments with timestamps (start-end in seconds):\n\n`;
+    
+    transcription.segments.forEach(segment => {
+      prompt += `[${segment.start.toFixed(2)}-${segment.end.toFixed(2)}]: ${segment.text}\n`;
+    });
+    
+    prompt += `\nPlease analyze the content, speaking patterns, and context to assign consistent speaker labels to each segment.`;
+    prompt += `Remember to maintain consistency - if "Speaker 1" is identified as the host in one segment, they should be labeled as "Speaker 1" throughout.`;
+
+    // Make the API request to GPT
+    const response = await axios.post(
+      options.useGPT4 ? 'https://api.openai.com/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions',
+      {
+        model: options.useGPT4 ? 'gpt-4' : 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert audio transcription assistant skilled in speaker diarization.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.2,
+        max_tokens: 4000
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    // Extract the content from the response
+    const result = response.data.choices[0].message.content;
+    
+    // Parse the response to update the transcript with speaker information
+    return parseDiarizationResult(result, transcription);
+  } catch (error) {
+    console.error('Speaker diarization error:', error);
+    
+    if (axios.isAxiosError(error) && error.response) {
+      console.error('API error details:', error.response.data);
+    }
+    
+    // Return the original transcription without speaker information
+    console.log('Continuing without speaker diarization');
+    return transcription;
+  }
+}
+
+/**
+ * Parses the AI response to extract speaker information
+ * @param aiResponse The text response from the AI
+ * @param originalTranscription The original transcription result
+ * @returns Updated transcription with speaker information
+ */
+function parseDiarizationResult(
+  aiResponse: string,
+  originalTranscription: TranscriptionResult
+): TranscriptionResult {
+  try {
+    // Extract segments with speaker labels from the AI response
+    const speakerPattern = /(?:Speaker\s*\d+|Unknown\s*Speaker|Interviewer|Respondent|Host|Guest):\s*(.*?)(?=(?:\n\s*(?:Speaker\s*\d+|Unknown\s*Speaker|Interviewer|Respondent|Host|Guest):)|$)/gis;
+    const timePattern = /\[(\d+\.\d+)-(\d+\.\d+)\]:\s*(.*?)(?=\n|$)/gs;
+    
+    // Create a map of text to potential speakers
+    const textToSpeakerMap = new Map<string, string>();
+    
+    // First try to match based on timestamps if they're in the response
+    let timeMatch;
+    while ((timeMatch = timePattern.exec(aiResponse)) !== null) {
+      const [_, startTime, endTime, text] = timeMatch;
+      const speakerMatch = /(?:Speaker\s*\d+|Unknown\s*Speaker|Interviewer|Respondent|Host|Guest)/i.exec(text);
+      if (speakerMatch) {
+        const speaker = speakerMatch[0].trim();
+        const cleanText = text.replace(speakerMatch[0] + ':', '').trim();
+        
+        // Find the closest matching segment in the original transcription
+        const start = parseFloat(startTime);
+        const end = parseFloat(endTime);
+        for (const segment of originalTranscription.segments) {
+          if (Math.abs(segment.start - start) < 1 && Math.abs(segment.end - end) < 1) {
+            textToSpeakerMap.set(segment.text, speaker);
+            break;
+          }
+        }
+      }
+    }
+    
+    // If timestamp matching failed, try matching based on the speaker pattern
+    let speakerMatch;
+    while ((speakerMatch = speakerPattern.exec(aiResponse)) !== null) {
+      const [fullMatch, text] = speakerMatch;
+      const speaker = fullMatch.split(':')[0].trim();
+      
+      if (text && speaker) {
+        // Try to find matching text in the original transcription
+        for (const segment of originalTranscription.segments) {
+          if (segment.text.includes(text.trim().substring(0, 20))) {
+            textToSpeakerMap.set(segment.text, speaker);
+          }
+        }
+      }
+    }
+    
+    // Update the original transcription with speaker information
+    const updatedSegments = originalTranscription.segments.map(segment => {
+      const speaker = textToSpeakerMap.get(segment.text);
+      return {
+        ...segment,
+        speaker: speaker // This will be undefined if no speaker was found, matching the interface
+      };
+    });
+    
+    return {
+      ...originalTranscription,
+      segments: updatedSegments
+    };
+  } catch (error) {
+    console.error('Error parsing diarization result:', error);
+    return originalTranscription;
+  }
+}
+
+/**
+ * Transcribes an audio file with speaker diarization
+ * @param audioFilePath Path to the audio file
+ * @param options Transcription options
+ * @returns The transcription result with speaker information
+ */
+export async function transcribeAudioWithDiarization(
+  audioFilePath: string,
+  options: TranscriptionOptions = {}
+): Promise<TranscriptionResult> {
+  // First perform the standard transcription
+  const result = await transcribeAudio(audioFilePath, options);
+  
+  // Then apply speaker diarization if requested
+  if (options.speakerDiarization) {
+    console.log('Applying speaker diarization to the transcript...');
+    return await performSpeakerDiarization(result, {
+      useGPT4: true, // For best results
+    });
+  }
+  
+  return result;
 } 
