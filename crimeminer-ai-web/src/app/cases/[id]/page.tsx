@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
@@ -27,15 +27,21 @@ import {
   MessageSquare,
   Plus,
   Upload,
-  X
+  X,
+  Download,
+  Trash2,
+  RefreshCw,
+  Eye
 } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
+import { Table, TableHeader, TableBody, TableCell, TableRow, TableHead } from '@/components/ui/table';
+import Image from 'next/image';
 
 export default function CaseDetailPage() {
   const router = useRouter();
   const { id } = useParams();
   const [newNote, setNewNote] = useState('');
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState('summary');
   
   // Dialog states
   const [isFileUploadOpen, setIsFileUploadOpen] = useState(false);
@@ -63,6 +69,33 @@ export default function CaseDetailPage() {
     enabled: !!id
   });
 
+  // Fetch case files
+  const { data: caseFiles = [], isLoading: isFilesLoading } = useQuery({
+    queryKey: ['caseFiles', id],
+    queryFn: async () => {
+      try {
+        console.log(`Fetching files for case ID: ${id}`);
+        const files = await fileService.getFilesByCase(id as string);
+        console.log(`Retrieved ${files.length} files for case ID: ${id}`, files);
+        return files;
+      } catch (error) {
+        console.error(`Error fetching files for case ID: ${id}:`, error);
+        return [];
+      }
+    },
+    refetchOnWindowFocus: false
+  });
+
+  // Handle file deletion
+  const handleDeleteFile = (fileId: string) => {
+    if (window.confirm('Are you sure you want to delete this file? This action cannot be undone.')) {
+      fileService.deleteFile(fileId).then(() => {
+        // Refresh the files list
+        refetch();
+      });
+    }
+  };
+
   // Initialize the edit form when case data is loaded
   useEffect(() => {
     if (caseData) {
@@ -74,6 +107,14 @@ export default function CaseDetailPage() {
       });
     }
   }, [caseData]);
+
+  // Format file size for display
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+  };
 
   const handleAddNote = async () => {
     if (!newNote.trim()) return;
@@ -92,8 +133,14 @@ export default function CaseDetailPage() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   
+  const openFileSelector = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+  
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setUploadError('');
+    setUploadError(null);
     if (e.target.files && e.target.files.length > 0) {
       const filesArray = Array.from(e.target.files);
       setSelectedFiles(filesArray);
@@ -124,97 +171,37 @@ export default function CaseDetailPage() {
     }
 
     setIsUploading(true);
+    setUploadError(null);
     let successCount = 0;
     let errorCount = 0;
-    let errorMessages = [];
 
     try {
       for (const file of selectedFiles) {
-        // File size validation (10MB limit)
-        if (file.size > 10 * 1024 * 1024) {
-          setUploadError(`File ${file.name} exceeds the 10MB limit`);
-          setIsUploading(false);
-          return;
-        }
-
         try {
-          console.log(`Uploading file: ${file.name} (${file.type}), size: ${file.size} bytes`);
-          
-          // Upload file
-          const formData = new FormData();
-          formData.append('file', file);
-          
-          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/upload`, {
-            method: 'POST',
-            body: formData,
-          });
-
-          // Get the response text regardless of status code
-          const responseText = await response.text();
-          let responseData;
-          
-          try {
-            // Try to parse as JSON
-            responseData = JSON.parse(responseText);
-          } catch (e) {
-            // If not valid JSON, use the text
-            responseData = { error: responseText };
-          }
-
-          if (!response.ok) {
-            console.error('File upload error response:', responseText);
-            
-            const errorMessage = responseData.error || responseData.message || `Server error ${response.status}`;
-            errorMessages.push(`${file.name}: ${errorMessage}`);
-            errorCount++;
-            continue;
-          }
-
-          console.log('File uploaded successfully, adding to case:', responseData);
-
-          // Associate file with case
-          const evidenceResult = await caseService.addEvidenceToCase(id as string, responseData.id);
-          console.log('Evidence association result:', evidenceResult);
-          
-          if (evidenceResult.success) {
-            successCount++;
-          } else {
-            const errorMessage = evidenceResult.error || 'Unknown error associating file with case';
-            console.error('Error associating evidence with case:', errorMessage);
-            errorMessages.push(`${file.name}: ${errorMessage}`);
-            errorCount++;
-          }
+          // Upload the file using the fileService
+          await fileService.uploadFile(file, id as string);
+          successCount++;
         } catch (error) {
-          console.error('Error uploading file:', error);
-          errorMessages.push(`${file.name}: ${error.message || 'Unknown upload error'}`);
+          console.error(`Error uploading file ${file.name}:`, error);
           errorCount++;
         }
       }
 
+      // Refresh file list and close dialog on success
       if (successCount > 0) {
+        refetch();
         setIsFileUploadOpen(false);
         setSelectedFiles([]);
-        refetch();
       }
 
       if (errorCount > 0) {
-        if (successCount > 0) {
-          setUploadError(`${successCount} files uploaded successfully, ${errorCount} files failed. Errors: ${errorMessages.join('; ')}`);
-        } else {
-          setUploadError(`Failed to upload files. Errors: ${errorMessages.join('; ')}`);
-        }
+        setUploadError(`${errorCount} file(s) failed to upload. ${successCount} succeeded.`);
       }
     } catch (error) {
-      console.error('Error in file upload process:', error);
-      setUploadError(`An unexpected error occurred during upload: ${error.message || 'Unknown error'}`);
+      console.error('File upload error:', error);
+      setUploadError('An error occurred during upload');
     } finally {
       setIsUploading(false);
-    }
-  };
-  
-  const openFileSelector = () => {
-    if (fileInputRef.current) {
-      fileInputRef.current.click();
     }
   };
   
@@ -272,6 +259,106 @@ export default function CaseDetailPage() {
         return null;
     }
   };
+
+  // File Preview Dialog Component
+  function FilePreviewDialog({ file }: { file: FileMetadata }) {
+    // Parse createdAt if it's a string
+    const createdAt = file.createdAt 
+      ? (typeof file.createdAt === 'string' 
+          ? new Date(file.createdAt) 
+          : file.createdAt)
+      : null;
+      
+    const formattedDate = createdAt && !isNaN(createdAt.getTime())
+      ? formatDistanceToNow(createdAt, { addSuffix: true })
+      : 'Unknown date';
+
+    // Use a direct link for file URL
+    const fileUrl = fileService.getFileUrl(file.id);
+
+    return (
+      <Dialog>
+        <DialogTrigger>
+          <Button variant="ghost" size="icon" aria-label={`Preview ${file.originalName}`}>
+            <Eye className="h-4 w-4" />
+          </Button>
+        </DialogTrigger>
+        <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{file.originalName}</DialogTitle>
+            <DialogDescription>
+              {file.fileType} - {formattedDate}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="py-4">
+            {file.fileType === 'image' ? (
+              <div className="flex flex-col items-center gap-4">
+                <div className="relative w-full max-h-[60vh] overflow-hidden rounded-lg">
+                  <Image
+                    src={fileUrl}
+                    alt={file.originalName}
+                    width={800}
+                    height={600}
+                    className="object-contain w-full h-full"
+                    style={{ maxHeight: '60vh' }}
+                  />
+                </div>
+                <a href={fileUrl} download={file.originalName}>
+                  <Button variant="outline">Download Original</Button>
+                </a>
+              </div>
+            ) : file.fileType === 'audio' ? (
+              <div className="flex flex-col items-center gap-4">
+                <div className="w-full max-w-2xl bg-muted rounded-lg p-4">
+                  <audio controls className="w-full">
+                    <source src={fileUrl} type={file.mimeType} />
+                    Your browser does not support the audio element.
+                  </audio>
+                </div>
+                <a href={fileUrl} download={file.originalName}>
+                  <Button variant="outline">Download Audio</Button>
+                </a>
+              </div>
+            ) : file.fileType === 'video' ? (
+              <div className="flex flex-col items-center gap-4">
+                <div className="w-full max-w-2xl bg-muted rounded-lg overflow-hidden">
+                  <video controls className="w-full">
+                    <source src={fileUrl} type={file.mimeType} />
+                    Your browser does not support the video element.
+                  </video>
+                </div>
+                <a href={fileUrl} download={file.originalName}>
+                  <Button variant="outline">Download Video</Button>
+                </a>
+              </div>
+            ) : file.fileType === 'document' && file.mimeType === 'application/pdf' ? (
+              <div className="flex flex-col items-center gap-4">
+                <div className="w-full h-[60vh] bg-muted rounded-lg overflow-hidden">
+                  <iframe
+                    src={`${fileUrl}#view=FitH`}
+                    className="w-full h-full"
+                    title={file.originalName}
+                  />
+                </div>
+                <a href={fileUrl} download={file.originalName}>
+                  <Button variant="outline">Download PDF</Button>
+                </a>
+              </div>
+            ) : (
+              <div className="border rounded p-4 text-center">
+                <File className="h-16 w-16 mx-auto mb-4 text-muted-foreground" />
+                <p className="mb-4">This file type cannot be previewed directly in the browser</p>
+                <a href={fileUrl} download={file.originalName}>
+                  <Button>Download File</Button>
+                </a>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -351,8 +438,8 @@ export default function CaseDetailPage() {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-8">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="evidence">Evidence ({caseData.evidence?.length || 0})</TabsTrigger>
           <TabsTrigger value="notes">Notes ({caseData.notes?.length || 0})</TabsTrigger>
+          <TabsTrigger value="files" className="font-semibold">Files {isFilesLoading ? "(Loading...)" : `(${caseFiles?.length || 0})`}</TabsTrigger>
         </TabsList>
         
         {/* Overview Tab */}
@@ -438,7 +525,7 @@ export default function CaseDetailPage() {
                 )}
               </CardContent>
               <CardFooter>
-                <Button variant="outline" className="w-full" onClick={() => setActiveTab('evidence')}>
+                <Button variant="outline" className="w-full" onClick={() => setActiveTab('files')}>
                   View All Evidence
                 </Button>
               </CardFooter>
@@ -489,54 +576,221 @@ export default function CaseDetailPage() {
           </div>
         </TabsContent>
         
-        {/* Evidence Tab */}
-        <TabsContent value="evidence">
+        {/* Files Tab */}
+        <TabsContent value="files">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle>Evidence</CardTitle>
+                <CardTitle>Case Evidence Files</CardTitle>
                 <CardDescription>
-                  Manage evidence attached to this case
+                  All files associated with this case
                 </CardDescription>
               </div>
               <Button onClick={() => setIsFileUploadOpen(true)}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add Evidence
+                <Upload className="h-4 w-4 mr-2" />
+                Upload Files
               </Button>
             </CardHeader>
             <CardContent>
-              {!caseData.evidence?.length ? (
+              {isFilesLoading ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                </div>
+              ) : !caseFiles || caseFiles.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-center">
                   <File className="h-16 w-16 text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-medium mb-2">No Evidence Attached</h3>
+                  <h3 className="text-lg font-medium mb-2">No Files Found</h3>
                   <p className="text-muted-foreground mb-4">
-                    Start by adding evidence files to this case
+                    This case does not have any files associated with it yet.
                   </p>
-                  <Button onClick={() => setIsFileUploadOpen(true)}>
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Evidence
-                  </Button>
+                  <div className="flex gap-4">
+                    <Button onClick={() => setIsFileUploadOpen(true)}>
+                      <Upload className="h-4 w-4 mr-2" />
+                      Upload Files
+                    </Button>
+                    <Button variant="outline" onClick={() => refetch()}>
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Refresh
+                    </Button>
+                  </div>
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {caseData.evidence.map((item: any) => (
-                    <div key={item.id} className="flex items-center p-3 border rounded hover:bg-muted transition">
-                      <File className="h-5 w-5 mr-3 text-muted-foreground" />
-                      <div className="flex-1">
-                        <p className="font-medium">{item.fileName}</p>
-                        <div className="flex text-xs text-muted-foreground">
-                          <span>{item.fileType}</span>
-                          <span className="mx-2">•</span>
-                          <span>{Math.round(Number(item.fileSize) / 1024)} KB</span>
+                <div>
+                  <Tabs defaultValue="audio">
+                    <TabsList className="mb-4">
+                      <TabsTrigger value="audio">
+                        Audio ({caseFiles.filter(f => {
+                          if (f.fileType === 'audio') return true;
+                          try {
+                            const metadata = f.metadata ? JSON.parse(f.metadata) : null;
+                            return metadata?.audioExtracted === true;
+                          } catch (e) {
+                            return false;
+                          }
+                        }).length})
+                      </TabsTrigger>
+                      <TabsTrigger value="video">
+                        Video ({caseFiles.filter(f => f.fileType === 'video').length})
+                      </TabsTrigger>
+                      <TabsTrigger value="images">
+                        Images ({caseFiles.filter(f => f.fileType === 'image').length})
+                      </TabsTrigger>
+                      <TabsTrigger value="documents">
+                        Documents ({caseFiles.filter(f => f.fileType === 'document').length})
+                      </TabsTrigger>
+                    </TabsList>
+
+                    <TabsContent value="audio">
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-center">
+                          <h3 className="text-lg font-medium">Audio Files</h3>
+                          <Button variant="outline" onClick={() => {/* TODO: Implement batch transcription */}}>
+                            Transcribe All
+                          </Button>
+                        </div>
+                        <div className="space-y-2">
+                          {caseFiles
+                            .filter(f => {
+                              if (f.fileType === 'audio') return true;
+                              try {
+                                const metadata = f.metadata ? JSON.parse(f.metadata) : null;
+                                return metadata?.audioExtracted === true;
+                              } catch (e) {
+                                return false;
+                              }
+                            })
+                            .map((file) => (
+                              <div key={file.id} className="border rounded-lg p-4">
+                                <div className="flex justify-between items-center mb-2">
+                                  <div>
+                                    <h4 className="font-medium">{file.originalName}</h4>
+                                    <p className="text-sm text-muted-foreground">
+                                      {formatFileSize(file.size)} • {formatDistanceToNow(new Date(file.createdAt))} ago
+                                      {(() => {
+                                        try {
+                                          const metadata = file.metadata ? JSON.parse(file.metadata) : null;
+                                          if (metadata?.audioExtracted) {
+                                            return ' • Extracted from video';
+                                          }
+                                          return '';
+                                        } catch (e) {
+                                          return '';
+                                        }
+                                      })()}
+                                    </p>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <Button variant="outline" size="sm">
+                                      Transcribe
+                                    </Button>
+                                    <FilePreviewDialog file={file} />
+                                  </div>
+                                </div>
+                                <div className="bg-muted rounded-md p-2">
+                                  <audio controls className="w-full">
+                                    <source src={fileService.getFileUrl(file.id)} type={file.mimeType} />
+                                    Your browser does not support the audio element.
+                                  </audio>
+                                </div>
+                              </div>
+                            ))}
                         </div>
                       </div>
-                      <Button variant="outline" size="sm" asChild>
-                        <a href={fileService.getFileUrl(item.id)} target="_blank" rel="noopener noreferrer">
-                          View
-                        </a>
-                      </Button>
-                    </div>
-                  ))}
+                    </TabsContent>
+
+                    <TabsContent value="video">
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-center">
+                          <h3 className="text-lg font-medium">Video Files</h3>
+                        </div>
+                        <div className="space-y-2">
+                          {caseFiles
+                            .filter(f => f.fileType === 'video')
+                            .map((file) => (
+                              <div key={file.id} className="border rounded-lg p-4">
+                                <div className="flex justify-between items-center mb-2">
+                                  <div>
+                                    <h4 className="font-medium">{file.originalName}</h4>
+                                    <p className="text-sm text-muted-foreground">
+                                      {formatFileSize(file.size)} • {formatDistanceToNow(new Date(file.createdAt))} ago
+                                    </p>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <FilePreviewDialog file={file} />
+                                  </div>
+                                </div>
+                                <div className="bg-muted rounded-md p-2">
+                                  <video controls className="w-full">
+                                    <source src={fileService.getFileUrl(file.id)} type={file.mimeType} />
+                                    Your browser does not support the video element.
+                                  </video>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    </TabsContent>
+
+                    <TabsContent value="images">
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-center">
+                          <h3 className="text-lg font-medium">Image Files</h3>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {caseFiles
+                            .filter(f => f.fileType === 'image')
+                            .map((file) => (
+                              <div key={file.id} className="border rounded-lg p-4">
+                                <div className="flex justify-between items-center mb-2">
+                                  <div>
+                                    <h4 className="font-medium">{file.originalName}</h4>
+                                    <p className="text-sm text-muted-foreground">
+                                      {formatFileSize(file.size)} • {formatDistanceToNow(new Date(file.createdAt))} ago
+                                    </p>
+                                  </div>
+                                  <FilePreviewDialog file={file} />
+                                </div>
+                                <div className="relative aspect-square">
+                                  <Image
+                                    src={fileService.getFileUrl(file.id)}
+                                    alt={file.originalName}
+                                    fill
+                                    className="object-cover rounded-md"
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    </TabsContent>
+
+                    <TabsContent value="documents">
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-center">
+                          <h3 className="text-lg font-medium">Document Files</h3>
+                        </div>
+                        <div className="space-y-2">
+                          {caseFiles
+                            .filter(f => f.fileType === 'document')
+                            .map((file) => (
+                              <div key={file.id} className="border rounded-lg p-4">
+                                <div className="flex justify-between items-center">
+                                  <div>
+                                    <h4 className="font-medium">{file.originalName}</h4>
+                                    <p className="text-sm text-muted-foreground">
+                                      {formatFileSize(file.size)} • {formatDistanceToNow(new Date(file.createdAt))} ago
+                                    </p>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <FilePreviewDialog file={file} />
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    </TabsContent>
+                  </Tabs>
                 </div>
               )}
             </CardContent>
@@ -601,94 +855,94 @@ export default function CaseDetailPage() {
       </Tabs>
       
       {/* File Upload Dialog */}
-      {isFileUploadOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg w-full max-w-md">
-            <h3 className="text-xl font-semibold mb-4">Upload Evidence</h3>
-            
-            {uploadError && (
-              <div className="mb-4 p-2 bg-red-100 text-red-800 rounded">
-                {uploadError}
-              </div>
-            )}
-            
-            <div 
-              className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-4 mb-4 text-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700"
-              onClick={openFileSelector}
-              onDrop={handleFileDrop}
-              onDragOver={handleDragOver}
-            >
-              <input
-                type="file"
-                multiple
-                ref={fileInputRef}
-                onChange={handleFileChange}
-                className="hidden"
-              />
-              <p className="mb-2">
-                <svg className="w-8 h-8 mx-auto text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
-                </svg>
-              </p>
-              <p>Drag files here or <span className="text-blue-500">click to browse</span></p>
-              <p className="text-xs text-gray-500 mt-1">Maximum file size: 10MB</p>
+      <Dialog open={isFileUploadOpen} onOpenChange={setIsFileUploadOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Upload Evidence Files</DialogTitle>
+            <DialogDescription>
+              Upload files to add as evidence to this case
+            </DialogDescription>
+          </DialogHeader>
+          
+          {uploadError && (
+            <div className="bg-red-50 text-red-600 p-3 rounded border border-red-200 text-sm">
+              {uploadError}
             </div>
-            
-            {selectedFiles.length > 0 && (
-              <div className="mb-4">
-                <p className="font-medium mb-2">Selected Files ({selectedFiles.length})</p>
-                <ul className="max-h-40 overflow-y-auto">
-                  {selectedFiles.map((file, index) => (
-                    <li key={index} className="flex justify-between items-center py-2 border-b">
-                      <div className="truncate flex-1">
-                        <span className="font-medium">{file.name}</span>
-                        <span className="text-xs text-gray-500 ml-2">
-                          ({(file.size / 1024).toFixed(1)} KB)
-                        </span>
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeFile(index);
-                        }}
-                        className="ml-2 text-red-500 hover:text-red-700"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
-                        </svg>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            
-            <div className="flex justify-end mt-4">
-              <button
-                onClick={() => {
-                  setIsFileUploadOpen(false);
-                  setSelectedFiles([]);
-                  setUploadError('');
-                }}
-                className="px-4 py-2 text-gray-600 hover:text-gray-800 mr-2"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleFileUpload}
-                disabled={isUploading || selectedFiles.length === 0}
-                className={`px-4 py-2 rounded ${
-                  isUploading || selectedFiles.length === 0
-                    ? 'bg-blue-300 cursor-not-allowed'
-                    : 'bg-blue-500 hover:bg-blue-600 text-white'
-                }`}
-              >
-                {isUploading ? 'Uploading...' : 'Upload'}
-              </button>
-            </div>
+          )}
+          
+          <div 
+            className="border-2 border-dashed border-muted rounded-lg p-6 text-center cursor-pointer hover:bg-muted/30 transition-colors"
+            onClick={openFileSelector}
+            onDrop={handleFileDrop}
+            onDragOver={handleDragOver}
+          >
+            <input
+              type="file"
+              multiple
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            <Upload className="w-10 h-10 mx-auto mb-3 text-muted-foreground" />
+            <p className="text-sm mb-1">Drag files here or <span className="text-primary font-medium">click to browse</span></p>
+            <p className="text-xs text-muted-foreground">Maximum file size: 10MB</p>
           </div>
-        </div>
-      )}
+          
+          {selectedFiles.length > 0 && (
+            <div className="mt-4">
+              <h4 className="font-medium text-sm mb-2">Selected Files ({selectedFiles.length})</h4>
+              <div className="max-h-48 overflow-y-auto border rounded divide-y">
+                {selectedFiles.map((file, index) => (
+                  <div key={index} className="flex justify-between items-center p-2">
+                    <div className="truncate flex-1 text-sm">
+                      <span className="font-medium">{file.name}</span>
+                      <span className="text-xs text-muted-foreground ml-2">
+                        {formatFileSize(file.size)}
+                      </span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeFile(index);
+                      }}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          <DialogFooter className="mt-4">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsFileUploadOpen(false);
+                setSelectedFiles([]);
+                setUploadError(null);
+              }}
+              disabled={isUploading}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleFileUpload}
+              disabled={isUploading || selectedFiles.length === 0}
+            >
+              {isUploading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Uploading...
+                </>
+              ) : 'Upload'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       
       {/* Edit Case Dialog */}
       <Dialog open={isEditCaseOpen} onOpenChange={setIsEditCaseOpen}>

@@ -10,7 +10,7 @@ export default function Navbar() {
   
   const navItems = [
     { href: '/', label: 'Dashboard', icon: <BarChart2 className="h-5 w-5" /> },
-    { href: '/files', label: 'Files', icon: <FolderOpen className="h-5 w-5" /> },
+    { href: '/cases', label: 'Cases', icon: <FolderOpen className="h-5 w-5" /> },
     { href: '/analyze', label: 'Analyze', icon: <FileText className="h-5 w-5" /> },
     { href: '/references', label: 'References', icon: <BookOpen className="h-5 w-5" /> },
     { href: '/timeline', label: 'Timeline', icon: <Clock className="h-5 w-5" /> },

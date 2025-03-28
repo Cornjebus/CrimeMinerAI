@@ -268,7 +268,6 @@ model Note {
   result       AnalysisResult? @relation("ResultNotes", fields: [resultId], references: [id])
   
   // Ensure a note is attached to at most one parent
-  @@check(((caseId != null) && (evidenceId == null) && (resultId == null)) || 
-          ((caseId == null) && (evidenceId != null) && (resultId == null)) || 
-          ((caseId == null) && (evidenceId == null) && (resultId != null)))
+  // This constraint should be enforced in application logic:
+  // A note should only be attached to one of: case, evidence, or result
 }

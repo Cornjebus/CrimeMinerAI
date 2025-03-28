@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
 import multer from 'multer';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, CaseStatus } from '@prisma/client';
 import timeout from 'connect-timeout';
 import { 
   analyzeText, 
@@ -13,12 +13,13 @@ import {
   identifyPatterns 
 } from './lib/ai';
 import {
+  ALLOWED_FILE_TYPES,
   saveFile,
   getFile,
   listFiles,
-  deleteFile,
-  ALLOWED_FILE_TYPES
+  deleteFile
 } from './lib/storage';
+import { listFilesByCase } from './lib/files';
 import {
   createReference,
   getReferencesForFile,
@@ -37,6 +38,8 @@ import {
   addCaseNote,
   getCaseStats
 } from './lib/cases';
+import path from 'path';
+import fs from 'fs';
 
 dotenv.config();
 
@@ -51,6 +54,13 @@ const upload = multer({
     fileSize: 50 * 1024 * 1024, // 50MB limit
   },
 });
+
+// Helper function to handle BigInt serialization
+const serializeWithBigInt = (data: any) => {
+  return JSON.parse(JSON.stringify(data, (key, value) => 
+    typeof value === 'bigint' ? value.toString() : value
+  ));
+};
 
 // Middleware setup
 app.use(cors({
@@ -75,6 +85,11 @@ app.use((req: Request & { timedout?: boolean }, res: Response, next: NextFunctio
 // Basic health check route
 app.get('/', (req: Request, res: Response) => {
   res.json({ message: 'CrimeMiner AI Backend API running successfully!' });
+});
+
+// Dedicated health check endpoint for frontend connectivity verification
+app.get('/health', (req: Request, res: Response) => {
+  res.status(200).json({ status: 'ok', message: 'CrimeMiner AI Backend is healthy' });
 });
 
 // Original AI analysis route (maintained for backward compatibility)
@@ -185,13 +200,45 @@ app.post('/api/files/upload', upload.single('file'), async (req: Request, res: R
       return;
     }
 
+    // Require caseId in the request body
+    const { caseId } = req.body;
+    if (!caseId) {
+      console.error('[UPLOAD ENDPOINT] No caseId provided');
+      res.status(400).json({ error: 'caseId is required for uploads' });
+      return;
+    }
+
+    console.log(`[UPLOAD ENDPOINT] Processing upload with caseId: ${caseId}`);
+
+    // Validate that the case exists
+    try {
+      const caseExists = await prisma.case.findUnique({
+        where: { id: caseId }
+      });
+      
+      if (!caseExists) {
+        console.error(`[UPLOAD ENDPOINT] Case with ID ${caseId} not found`);
+        res.status(404).json({ error: `Case with ID ${caseId} not found` });
+        return;
+      }
+      
+      console.log(`[UPLOAD ENDPOINT] Case validated: ${caseExists.title} (${caseExists.caseNumber})`);
+    } catch (caseError: any) {
+      console.error('[UPLOAD ENDPOINT] Error validating case:', caseError);
+      res.status(500).json({ 
+        error: 'Error validating case',
+        details: caseError.message
+      });
+      return;
+    }
+
     const { originalname, mimetype, buffer, size } = req.file;
-    console.log(`[UPLOAD ENDPOINT] Processing file: ${originalname} (${mimetype}, ${size} bytes)`);
+    console.log(`[UPLOAD ENDPOINT] Processing file: ${originalname} (${mimetype}, ${size} bytes) for case ${caseId}`);
     
     // Save the file
     try {
-      const metadata = await saveFile(buffer, originalname, mimetype);
-      console.log(`[UPLOAD ENDPOINT] File saved successfully with ID: ${metadata.id}`);
+      const metadata = await saveFile(buffer, originalname, mimetype, caseId);
+      console.log(`[UPLOAD ENDPOINT] File saved successfully with ID: ${metadata.id} for case ${caseId}`);
       res.status(201).json(metadata);
     } catch (saveError: any) {
       console.error('[UPLOAD ENDPOINT] Error saving file:', saveError);
@@ -247,7 +294,43 @@ app.get('/api/files/:id', async (req: Request, res: Response) => {
     
     // Set appropriate content type
     res.setHeader('Content-Type', metadata.mimeType);
-    res.setHeader('Content-Disposition', `attachment; filename="${metadata.originalName}"`);
+    
+    // Set CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD');
+    res.setHeader('Access-Control-Allow-Headers', 'Range');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
+    
+    // Only set Content-Disposition: attachment for non-streamable files
+    const streamableTypes = ['audio/', 'video/', 'image/', 'application/pdf'];
+    const isStreamable = streamableTypes.some(type => metadata.mimeType.startsWith(type));
+    
+    if (!isStreamable) {
+      res.setHeader('Content-Disposition', `attachment; filename="${metadata.originalName}"`);
+    } else {
+      // Add headers for better streaming support
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      
+      // Handle range requests for audio/video streaming
+      if (metadata.mimeType.startsWith('audio/') || metadata.mimeType.startsWith('video/')) {
+        const range = req.headers.range;
+        if (range) {
+          const parts = range.replace(/bytes=/, '').split('-');
+          const start = parseInt(parts[0], 10);
+          const end = parts[1] ? parseInt(parts[1], 10) : content.length - 1;
+          const chunksize = (end - start) + 1;
+          
+          res.status(206);
+          res.setHeader('Content-Range', `bytes ${start}-${end}/${content.length}`);
+          res.setHeader('Content-Length', chunksize);
+          res.send(content.slice(start, end + 1));
+          return;
+        }
+      }
+    }
     
     // Send the file
     res.send(content);
@@ -371,18 +454,17 @@ app.get('/api/references/report/:caseId', async (req: Request, res: Response) =>
 
 // Get all cases with filtering
 app.get('/api/cases', async (req: Request, res: Response) => {
+  const status = req.query.status as CaseStatus | undefined;
+
   try {
-    const { status, userId, assignedToId, limit, offset } = req.query;
+    const casesData = await getCases({
+      status
+    });
     
-    const result = await getCases(
-      status as any,
-      userId as string,
-      assignedToId as string,
-      limit ? parseInt(limit as string) : undefined,
-      offset ? parseInt(offset as string) : undefined
-    );
+    // Serialize to handle BigInt values
+    const serializedCasesData = serializeWithBigInt(casesData);
     
-    res.json(result);
+    res.json(serializedCasesData);
   } catch (error: any) {
     console.error('Error fetching cases:', error);
     res.status(500).json({ error: error.message });
@@ -391,15 +473,44 @@ app.get('/api/cases', async (req: Request, res: Response) => {
 
 // Get case by ID
 app.get('/api/cases/:id', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  
   try {
-    const { id } = req.params;
-    const caseData = await getCaseById(id);
+    console.log(`Fetching case with ID: ${id}`);
+    
+    const caseData = await prisma.case.findUnique({
+      where: { id },
+      include: {
+        evidence: true,
+        notes: {
+          include: {
+            createdBy: true
+          },
+          orderBy: {
+            createdAt: 'desc'
+          }
+        },
+        createdBy: true,
+        assignedTo: true,
+        _count: {
+          select: {
+            evidence: true,
+            notes: true
+          }
+        }
+      }
+    });
     
     if (!caseData) {
+      console.log(`Case with ID ${id} not found`);
       return res.status(404).json({ error: 'Case not found' });
     }
     
-    res.json(caseData);
+    // Handle BigInt serialization
+    const serializedCase = serializeWithBigInt(caseData);
+    
+    console.log(`Case found: ${caseData.title} (${caseData.caseNumber})`);
+    res.json(serializedCase);
   } catch (error: any) {
     console.error('Error fetching case:', error);
     res.status(500).json({ error: error.message });
@@ -595,6 +706,29 @@ app.get('/api/cases/stats/summary', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Error fetching case stats:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Get files by case ID
+app.get('/api/cases/:id/files', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const fileType = req.query.type as string | undefined;
+    
+    // Check if the case exists first
+    const caseExists = await prisma.case.findUnique({
+      where: { id }
+    });
+    
+    if (!caseExists) {
+      return res.status(404).json({ error: 'Case not found' });
+    }
+    
+    const files = await listFilesByCase(id, fileType);
+    res.status(200).json(files);
+  } catch (error: any) {
+    console.error('Error retrieving case files:', error);
+    res.status(500).json({ error: 'Could not retrieve case files', details: error.message });
   }
 });
 

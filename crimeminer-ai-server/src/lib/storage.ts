@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { PrismaClient, FileType } from '@prisma/client';
+import crypto from 'crypto';
+import { convertAudio, extractAudioFromVideo, AudioFormat } from './ffmpeg';
 
 const prisma = new PrismaClient();
 
@@ -95,108 +97,180 @@ function getFileTypeEnum(type: string): FileType {
  * @param file The uploaded file buffer
  * @param originalName Original filename
  * @param mimeType MIME type of the file
+ * @param caseId Optional case ID to associate the file with
  * @returns Metadata about the saved file
  */
 export async function saveFile(
   file: Buffer,
   originalName: string,
-  mimeType: string
+  mimeType: string,
+  caseId?: string
 ): Promise<FileMetadata> {
   console.log(`[UPLOAD] Starting file upload: ${originalName} (${mimeType})`);
   
-  // Check if file type is allowed
-  if (!ALLOWED_FILE_TYPES[mimeType]) {
-    console.error(`[UPLOAD ERROR] File type ${mimeType} is not allowed`);
-    throw new Error(`File type ${mimeType} is not allowed`);
-  }
-  
+  // Validate file type
   const fileTypeInfo = ALLOWED_FILE_TYPES[mimeType];
-  const extension = fileTypeInfo.extension;
-  console.log(`[UPLOAD] File type validated: ${fileTypeInfo.type}, extension: ${extension}`);
+  if (!fileTypeInfo) {
+    throw new Error(`Unsupported file type: ${mimeType}`);
+  }
+  console.log(`[UPLOAD] File type validated: ${fileTypeInfo.type}, extension: ${fileTypeInfo.extension}`);
   
-  // Generate a unique filename
-  const id = uuidv4();
-  const fileName = `${id}.${extension}`;
-  const filePath = path.join(UPLOAD_DIR, fileName);
+  // Generate unique filename
+  const id = crypto.randomUUID();
+  const fileName = `${id}.${fileTypeInfo.extension}`;
+  const filePath = path.join(process.cwd(), 'uploads', fileName);
+  
   console.log(`[UPLOAD] Generated filename: ${fileName}, path: ${filePath}`);
   
   try {
-    // Save the file to the filesystem
+    // Ensure uploads directory exists
+    const uploadsDir = path.join(process.cwd(), 'uploads');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    
+    // Save the original file to the filesystem
     fs.writeFileSync(filePath, file);
     console.log(`[UPLOAD] File saved to filesystem: ${filePath}`);
     
-    // Get file size
-    const stats = fs.statSync(filePath);
-    console.log(`[UPLOAD] File size: ${stats.size} bytes`);
+    let finalFilePath = filePath;
+    let finalMimeType = mimeType;
+    let finalExtension = fileTypeInfo.extension;
+    let audioExtracted = false;
+
+    // Handle WAV to MP3 conversion
+    if (mimeType === 'audio/wav') {
+      console.log(`[UPLOAD] Converting WAV to MP3: ${fileName}`);
+      try {
+        const mp3Path = await convertAudio(filePath, AudioFormat.MP3, {
+          sampleRate: 44100,
+          channels: 1,
+          bitrate: '128k',
+          normalize: true,
+          noiseReduction: true,
+          outputDir: uploadsDir
+        });
+        
+        // Delete the original WAV file
+        fs.unlinkSync(filePath);
+        
+        // Update file information
+        finalFilePath = mp3Path;
+        finalMimeType = 'audio/mpeg';
+        finalExtension = 'mp3';
+        console.log(`[UPLOAD] Successfully converted WAV to MP3: ${mp3Path}`);
+      } catch (error: any) {
+        console.error(`[UPLOAD] Failed to convert WAV to MP3:`, error);
+        throw new Error(`Failed to convert WAV to MP3: ${error.message}`);
+      }
+    }
+    
+    // Handle audio extraction from video
+    if (fileTypeInfo.type === 'video') {
+      console.log(`[UPLOAD] Extracting audio from video: ${fileName}`);
+      try {
+        const audioPath = await extractAudioFromVideo(filePath, AudioFormat.MP3, {
+          sampleRate: 44100,
+          channels: 1,
+          bitrate: '128k',
+          outputDir: uploadsDir
+        });
+        
+        // Create metadata for the extracted audio
+        const audioId = crypto.randomUUID();
+        const audioStats = fs.statSync(audioPath);
+        const audioMetadata: FileMetadata = {
+          id: audioId,
+          originalName: `${path.parse(originalName).name}_audio.mp3`,
+          fileName: path.basename(audioPath),
+          mimeType: 'audio/mpeg',
+          fileType: 'audio',
+          size: audioStats.size,
+          path: audioPath,
+          createdAt: new Date(),
+        };
+        
+        // Save audio metadata to database
+        await prisma.evidence.create({
+          data: {
+            id: audioId,
+            fileName: audioMetadata.fileName,
+            filePath: audioPath,
+            fileType: FileType.AUDIO,
+            fileSize: audioStats.size,
+            mimeType: 'audio/mpeg',
+            metadata: JSON.stringify(audioMetadata),
+            ...(caseId ? { case: { connect: { id: caseId } } } : {})
+          }
+        });
+        
+        audioExtracted = true;
+        console.log(`[UPLOAD] Successfully extracted audio: ${audioPath}`);
+      } catch (error: any) {
+        console.error(`[UPLOAD] Failed to extract audio from video:`, error);
+        // Don't throw error here, just log it and continue with the video file
+      }
+    }
+    
+    // Get file size of the final file
+    const stats = fs.statSync(finalFilePath);
+    console.log(`[UPLOAD] Final file size: ${stats.size} bytes`);
     
     // Create file metadata
     const metadata: FileMetadata = {
       id,
       originalName,
-      fileName,
-      mimeType,
+      fileName: path.basename(finalFilePath),
+      mimeType: finalMimeType,
       fileType: fileTypeInfo.type,
       size: stats.size,
-      path: filePath,
+      path: finalFilePath,
       createdAt: new Date(),
     };
     
     console.log(`[UPLOAD] Attempting to save file metadata to database with ID: ${id}`);
-    console.log(`[UPLOAD] Database fields to be used:`, {
-      id,
-      fileName,
-      filePath,
-      fileType: getFileTypeEnum(fileTypeInfo.type),
-      fileSize: stats.size,
-      mimeType,
-      metadata: JSON.stringify(metadata)
+    
+    // Add case relationship data if caseId is provided
+    let caseData = {};
+    if (caseId) {
+      console.log(`[UPLOAD] Associating file with case ID: ${caseId}`);
+      caseData = {
+        case: {
+          connect: { id: caseId }
+        }
+      };
+    }
+    
+    // Save to database with all necessary fields
+    const dbMetadata = await prisma.evidence.create({
+      data: {
+        id,
+        fileName: path.basename(finalFilePath),
+        filePath: finalFilePath,
+        fileType: getFileTypeEnum(fileTypeInfo.type),
+        fileSize: stats.size,
+        mimeType: finalMimeType,
+        metadata: JSON.stringify({
+          ...metadata,
+          audioExtracted,
+          originalMimeType: mimeType
+        }),
+        ...caseData
+      }
     });
     
-    try {
-      // Save file metadata to database - only use fields directly in the schema
-      const result = await prisma.evidence.create({
-        data: {
-          id,
-          fileName,
-          filePath,
-          fileType: getFileTypeEnum(fileTypeInfo.type),
-          fileSize: BigInt(stats.size),
-          mimeType,
-          // Store metadata as JSON but ONLY use fields that exist in the schema
-          metadata: JSON.stringify(metadata),
-          uploadedAt: new Date()
-          // DO NOT include type or content fields here
-        },
-      });
-      
-      console.log(`[UPLOAD] Successfully saved file metadata to database: ${id}`);
-      return metadata;
-    } catch (error: any) {
-      console.error('[UPLOAD ERROR] Error saving file to database:', error);
-      
-      // Log the exact Prisma error if available
-      if (error.code) {
-        console.error(`[UPLOAD ERROR] Prisma error code: ${error.code}`);
-      }
-      
-      if (error.meta) {
-        console.error('[UPLOAD ERROR] Prisma error metadata:', error.meta);
-      }
-      
-      // Clean up the file if database save fails
-      if (fs.existsSync(filePath)) {
-        try {
-          fs.unlinkSync(filePath);
-          console.log(`[UPLOAD] Deleted file ${filePath} due to database save failure`);
-        } catch (deleteError) {
-          console.error(`[UPLOAD ERROR] Failed to delete file ${filePath}:`, deleteError);
-        }
-      }
-      
-      throw error;
-    }
+    console.log(`[UPLOAD] Successfully saved file metadata to database: ${id}`);
+    return metadata;
   } catch (error: any) {
-    console.error('[UPLOAD ERROR] Error in overall file save process:', error);
+    // If there was an error, try to clean up the file if it was created
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (cleanupError: any) {
+      console.error(`[UPLOAD] Error cleaning up file after failed upload: ${cleanupError.message}`);
+    }
+    
     throw error;
   }
 }
@@ -207,14 +281,19 @@ export async function saveFile(
  * @returns File metadata and content
  */
 export async function getFile(id: string): Promise<{ metadata: FileMetadata; content: Buffer }> {
+  console.log(`[GET_FILE] Retrieving file with ID: ${id}`);
+  
   // Get file metadata from database
   const evidence = await prisma.evidence.findUnique({
     where: { id },
   });
   
   if (!evidence) {
+    console.error(`[GET_FILE] File with ID ${id} not found in database`);
     throw new Error(`File with ID ${id} not found`);
   }
+  
+  console.log(`[GET_FILE] Found evidence record:`, evidence);
   
   // Parse metadata or create from evidence fields
   let metadata: FileMetadata;
@@ -222,8 +301,14 @@ export async function getFile(id: string): Promise<{ metadata: FileMetadata; con
   if (evidence.metadata) {
     try {
       // Try to use the metadata field first
-      metadata = evidence.metadata as unknown as FileMetadata;
+      const parsedMetadata = typeof evidence.metadata === 'string' 
+        ? JSON.parse(evidence.metadata) 
+        : evidence.metadata;
+      
+      metadata = parsedMetadata as FileMetadata;
+      console.log(`[GET_FILE] Successfully parsed metadata for file ${id}`);
     } catch (e) {
+      console.error(`[GET_FILE] Error parsing metadata for file ${id}:`, e);
       // Fallback to constructing from database fields
       metadata = {
         id: evidence.id,
@@ -237,6 +322,7 @@ export async function getFile(id: string): Promise<{ metadata: FileMetadata; con
       };
     }
   } else {
+    console.log(`[GET_FILE] No metadata found, constructing from database fields for file ${id}`);
     // If no metadata, construct from database fields
     metadata = {
       id: evidence.id,
@@ -250,10 +336,23 @@ export async function getFile(id: string): Promise<{ metadata: FileMetadata; con
     };
   }
   
-  // Read file content
-  const content = fs.readFileSync(metadata.path);
+  // Ensure we have a valid file path
+  if (!metadata.path || !evidence.filePath) {
+    console.error(`[GET_FILE] No valid file path found for file ${id}`);
+    throw new Error('File path not found in metadata');
+  }
   
-  return { metadata, content };
+  console.log(`[GET_FILE] Attempting to read file from path: ${metadata.path}`);
+  
+  try {
+    // Read file content
+    const content = fs.readFileSync(metadata.path);
+    console.log(`[GET_FILE] Successfully read file content for ${id}`);
+    return { metadata, content };
+  } catch (error: any) {
+    console.error(`[GET_FILE] Error reading file content for ${id}:`, error);
+    throw new Error(`Error reading file: ${error.message}`);
+  }
 }
 
 /**

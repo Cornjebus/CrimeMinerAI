@@ -79,13 +79,19 @@ export async function createCase(
 }
 
 // Get all cases with optional filtering
-export async function getCases(
-  status?: CaseStatus,
-  userId?: string,
-  assignedToId?: string,
+export async function getCases({
+  status,
+  userId,
+  assignedToId,
   limit = 50,
   offset = 0
-) {
+}: {
+  status?: CaseStatus;
+  userId?: string;
+  assignedToId?: string;
+  limit?: number;
+  offset?: number;
+} = {}) {
   const where: any = {};
   
   if (status) {

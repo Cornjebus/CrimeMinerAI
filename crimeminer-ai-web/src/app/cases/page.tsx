@@ -217,7 +217,7 @@ export default function CasesPage() {
               <AlertTriangle className="h-8 w-8 mr-2" />
               <p>Error loading cases. Please try again later.</p>
             </div>
-          ) : !data?.cases.length ? (
+          ) : !data?.cases?.length ? (
             <div className="flex flex-col justify-center items-center h-64 text-muted-foreground">
               <FolderOpen className="h-16 w-16 mb-4" />
               <p className="text-xl">No cases found</p>
@@ -238,7 +238,7 @@ export default function CasesPage() {
                     <TableHead>Created</TableHead>
                     <TableHead>Updated</TableHead>
                     <TableHead>Evidence</TableHead>
-                    <TableHead></TableHead>
+                    <TableHead>{""}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -254,7 +254,7 @@ export default function CasesPage() {
                       </TableCell>
                       <TableCell>{formatDistanceToNow(caseItem.createdAt)} ago</TableCell>
                       <TableCell>{formatDistanceToNow(caseItem.updatedAt)} ago</TableCell>
-                      <TableCell>{caseItem._count?.evidence ?? 0} items</TableCell>
+                      <TableCell>{caseItem._count?.evidence || 0} items</TableCell>
                       <TableCell>
                         <Button variant="outline" asChild>
                           <Link href={`/cases/${caseItem.id}`}>View Details</Link>

@@ -7,21 +7,32 @@ import { AIMessage, BaseMessage } from '@langchain/core/messages';
 
 dotenv.config();
 
-// Base OpenAI chat model with moderate temperature for general use
-const openai = new ChatOpenAI({
-  openAIApiKey: process.env.OPENAI_API_KEY,
-  temperature: 0.2,
-  modelName: "gpt-4", // Using GPT-4 as requested
-  timeout: 180000, // 180 second timeout (3 minutes)
-});
+// Check if we have a valid API key (not starting with "sk-mock")
+const hasValidApiKey = process.env.OPENAI_API_KEY && !process.env.OPENAI_API_KEY.startsWith('sk-mock');
+const useMockResponses = !hasValidApiKey;
 
-// Specialized instance for entity extraction with lower temperature
-const preciseOpenAI = new ChatOpenAI({
-  openAIApiKey: process.env.OPENAI_API_KEY,
-  temperature: 0.1,
-  modelName: "gpt-4", // Using GPT-4 as requested
-  timeout: 180000, // 180 second timeout (3 minutes)
-});
+console.log(`Using ${useMockResponses ? 'MOCK' : 'ACTUAL'} OpenAI responses`);
+
+// Base OpenAI chat model with moderate temperature for general use
+let openai: ChatOpenAI | null = null;
+let preciseOpenAI: ChatOpenAI | null = null;
+
+if (!useMockResponses) {
+  openai = new ChatOpenAI({
+    openAIApiKey: process.env.OPENAI_API_KEY,
+    temperature: 0.2,
+    modelName: "gpt-4", // Using GPT-4 as requested
+    timeout: 180000, // 180 second timeout (3 minutes)
+  });
+
+  // Specialized instance for entity extraction with lower temperature
+  preciseOpenAI = new ChatOpenAI({
+    openAIApiKey: process.env.OPENAI_API_KEY,
+    temperature: 0.1,
+    modelName: "gpt-4", // Using GPT-4 as requested
+    timeout: 180000, // 180 second timeout (3 minutes)
+  });
+}
 
 // Helper function to get text content from an AI message
 const getMessageText = (message: BaseMessage | string): string => {
@@ -30,14 +41,41 @@ const getMessageText = (message: BaseMessage | string): string => {
   return typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
 };
 
+// Mock implementation when no valid API key is provided
+const mockInvoke = async (promptText: string) => {
+  console.log("MOCK AI: Received prompt:", promptText.substring(0, 100) + "...");
+  return "This is a mock response because no valid OpenAI API key was provided. Configure OPENAI_API_KEY in your .env file for actual responses.";
+};
+
 // Basic text analysis - original function, maintained for backward compatibility
 export async function analyzeText(prompt: string) {
-  const result = await openai.invoke(prompt);
+  if (useMockResponses) {
+    return mockInvoke(prompt);
+  }
+  
+  const result = await openai!.invoke(prompt);
   return getMessageText(result);
 }
 
 // Entity extraction with structured output
 export async function extractEntities(text: string) {
+  if (useMockResponses) {
+    return {
+      people: [
+        { name: "John Doe", role: "Suspect", confidence: 0.9 }
+      ],
+      locations: [
+        { name: "Central Park", details: "Crime scene", confidence: 0.85 }
+      ],
+      organizations: [],
+      dates: [
+        { date: "2023-01-15", event: "Incident date", confidence: 0.95 }
+      ],
+      weapons: [],
+      vehicles: []
+    };
+  }
+
   // Check if the text contains timestamps in the format [HH:MM:SS - HH:MM:SS]
   const hasTimestamps = /\[\d{2}:\d{2}:\d{2} - \d{2}:\d{2}:\d{2}\]/.test(text);
   
@@ -111,7 +149,7 @@ export async function extractEntities(text: string) {
   });
 
   const input = await prompt.format({ text });
-  const response = await preciseOpenAI.invoke(input);
+  const response = await preciseOpenAI!.invoke(input);
   const responseText = getMessageText(response);
   
   try {
@@ -124,6 +162,15 @@ export async function extractEntities(text: string) {
 
 // Evidence summarization
 export async function summarizeEvidence(text: string, maxLength: number = 200) {
+  if (useMockResponses) {
+    return {
+      summary: "This is a mock summary of the evidence.",
+      keyFindings: ["Mock finding 1", "Mock finding 2"],
+      relevanceScore: 8,
+      reliabilityAssessment: "Moderate reliability based on available information."
+    };
+  }
+  
   const summaryParser = StructuredOutputParser.fromZodSchema(
     z.object({
       summary: z.string().describe("Concise summary of the key points"),
@@ -151,7 +198,7 @@ export async function summarizeEvidence(text: string, maxLength: number = 200) {
   });
 
   const input = await prompt.format({ text, maxLength });
-  const response = await openai.invoke(input);
+  const response = await openai!.invoke(input);
   const responseText = getMessageText(response);
   
   try {
@@ -164,6 +211,35 @@ export async function summarizeEvidence(text: string, maxLength: number = 200) {
 
 // Sentiment and intent analysis
 export async function analyzeSentimentAndIntent(text: string) {
+  if (useMockResponses) {
+    return {
+      overallSentiment: "Neutral",
+      sentimentScore: 0,
+      emotionalTone: [
+        { emotion: "Neutral", confidence: 0.8 }
+      ],
+      possibleIntents: [
+        { 
+          intent: "Information sharing", 
+          description: "Providing factual information",
+          confidence: 0.9,
+          textEvidence: "Mock text evidence",
+          location: {
+            approximatePosition: 0,
+            lineNumber: 1,
+            charPosition: 0,
+            context: "Mock context"
+          }
+        }
+      ],
+      threatAssessment: {
+        threatLevel: "None",
+        explanation: "No threats detected in the text",
+        uncertaintyFactors: ["Mock data"]
+      }
+    };
+  }
+  
   const sentimentParser = StructuredOutputParser.fromZodSchema(
     z.object({
       overallSentiment: z.string().describe("Overall sentiment of the text"),
@@ -214,7 +290,7 @@ export async function analyzeSentimentAndIntent(text: string) {
   });
 
   const input = await prompt.format({ text });
-  const response = await openai.invoke(input);
+  const response = await openai!.invoke(input);
   const responseText = getMessageText(response);
   
   try {
@@ -261,6 +337,32 @@ export async function analyzeSentimentAndIntent(text: string) {
 
 // Criminal pattern identification
 export async function identifyPatterns(text: string) {
+  if (useMockResponses) {
+    return {
+      identifiedPatterns: [
+        { 
+          pattern: "Mock pattern", 
+          description: "This is a mock pattern",
+          confidence: 0.8,
+          evidencePoints: ["Mock evidence 1", "Mock evidence 2"]
+        }
+      ],
+      suggestedLeads: [
+        {
+          description: "Mock lead 1",
+          priority: "High",
+          rationale: "Mock rationale"
+        }
+      ],
+      modusOperandi: {
+        description: "Mock modus operandi",
+        confidence: 0.75,
+        characteristics: ["Mock characteristic 1"]
+      },
+      similarCaseIndicators: ["Mock indicator 1"]
+    };
+  }
+  
   // Limit text length to prevent timeouts
   const truncatedText = text.length > 4000 ? text.substring(0, 4000) + "..." : text;
   
@@ -309,7 +411,7 @@ export async function identifyPatterns(text: string) {
   const input = await prompt.format({ text: truncatedText });
   
   try {
-    const response = await openai.invoke(input);
+    const response = await openai!.invoke(input);
     const responseText = getMessageText(response);
     
     return patternParser.parse(responseText);

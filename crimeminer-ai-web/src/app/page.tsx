@@ -14,7 +14,7 @@ export default function Home() {
     queryKey: ['stats'],
     queryFn: async () => {
       try {
-        const response = await api.get('/api/stats');
+        const response = await api.get('/api/cases/stats/summary');
         return response.data;
       } catch (error) {
         console.error('Error fetching stats:', error);
@@ -29,31 +29,24 @@ export default function Home() {
 
   const features = [
     {
-      title: 'AI Analysis',
-      description: 'Extract entities, summarize evidence, analyze sentiment, and identify patterns in text.',
-      icon: Brain,
-      href: '/analyze?tab=sentiment',
+      title: 'Create New Case',
+      description: 'Start a new investigation case and begin uploading evidence.',
+      icon: FileTextIcon,
+      href: '/cases',
       color: 'bg-blue-100',
     },
     {
       title: 'Case Management',
-      description: 'Create and manage investigation cases, organize evidence, and add case notes.',
+      description: 'View and manage all investigation cases, evidence, and notes.',
       icon: FolderOpen,
       href: '/cases',
       color: 'bg-amber-100',
     },
     {
-      title: 'File Management',
-      description: 'Upload, organize, and manage evidence files securely.',
-      icon: Folder,
-      href: '/files',
-      color: 'bg-green-100',
-    },
-    {
-      title: 'Entity Extraction',
-      description: 'Automatically identify people, locations, dates, and other entities in your evidence.',
-      icon: Search,
-      href: '/analyze?tab=entities',
+      title: 'AI Analysis',
+      description: 'Extract entities, summarize evidence, analyze sentiment, and identify patterns.',
+      icon: Brain,
+      href: '/analyze?tab=sentiment',
       color: 'bg-purple-100',
     },
     {
@@ -61,7 +54,7 @@ export default function Home() {
       description: 'Generate comprehensive reports from your evidence analysis.',
       icon: FileText,
       href: '/analyze?tab=summary',
-      color: 'bg-amber-100',
+      color: 'bg-green-100',
     },
   ];
 

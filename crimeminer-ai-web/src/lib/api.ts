@@ -182,14 +182,17 @@ export interface FileMetadata {
   size: number;
   path: string;
   createdAt: Date;
+  caseId?: string;
+  metadata?: string;
 }
 
 // API interface for file operations
 export const fileService = {
   // Upload a file
-  uploadFile: async (file: File) => {
+  uploadFile: async (file: File, caseId: string) => {
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('caseId', caseId);
     
     const response = await api.post('/api/files/upload', formData, {
       headers: {
@@ -200,11 +203,57 @@ export const fileService = {
     return response.data as FileMetadata;
   },
   
+  // Get files by case ID
+  getFilesByCase: async (caseId: string, fileType?: string) => {
+    let url = `/api/cases/${caseId}/files`;
+    if (fileType) {
+      url += `?type=${fileType}`;
+    }
+    
+    const response = await api.get(url);
+    return response.data as FileMetadata[];
+  },
+  
   // Get all files
   getFiles: async (fileType?: string) => {
-    const params = fileType ? { type: fileType } : undefined;
-    const response = await api.get('/api/files', { params });
-    return response.data as FileMetadata[];
+    try {
+      // Ensure API is initialized with a valid server
+      if (!api.defaults.baseURL || api.defaults.baseURL.includes('null') || api.defaults.baseURL.includes('undefined')) {
+        console.warn('API baseURL is not properly set, using default URL');
+        api.defaults.baseURL = 'http://localhost:4000';
+      }
+      
+      const params = fileType ? { type: fileType } : undefined;
+      const response = await api.get('/api/files', { params });
+      
+      // Parse the response if it contains string JSON objects
+      if (Array.isArray(response.data)) {
+        return response.data.map(item => {
+          try {
+            // If item is a string, try to parse it as JSON
+            if (typeof item === 'string') {
+              try {
+                return JSON.parse(item) as FileMetadata;
+              } catch (e) {
+                console.error('Error parsing file JSON:', e);
+                return null;
+              }
+            }
+            
+            // If not a string, directly use the object
+            return item as FileMetadata;
+          } catch (error) {
+            console.error('Error processing file metadata:', error);
+            return null;
+          }
+        }).filter(Boolean) as FileMetadata[];
+      }
+      
+      return (response.data || []) as FileMetadata[];
+    } catch (error) {
+      console.error('Error fetching files:', error);
+      return [];
+    }
   },
   
   // Get file metadata
@@ -213,9 +262,10 @@ export const fileService = {
     return response.data as FileMetadata;
   },
   
-  // Get file download URL
+  // Get file download URL with fallback
   getFileUrl: (id: string) => {
-    return `${api.defaults.baseURL}/api/files/${id}`;
+    // Use direct URL for reliability
+    return `http://localhost:4000/api/files/${id}`;
   },
   
   // Delete a file
@@ -290,32 +340,33 @@ export const referencesService = {
   }
 };
 
-// Case interface
+// User interface
 export interface User {
   id: string;
   username: string;
-  firstName?: string;
-  lastName?: string;
+  firstName: string;
+  lastName: string;
 }
 
+// Case model interface
 export interface Case {
   id: string;
-  caseNumber: string;
   title: string;
-  description?: string;
+  caseNumber: string;
+  description: string | null;
   status: 'OPEN' | 'CLOSED' | 'ARCHIVED';
-  priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-  createdBy: User;
-  assignedTo?: User;
+  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | null;
   createdAt: Date;
   updatedAt: Date;
-  closedAt?: Date;
-  _count?: {
-    evidence: number;
-    notes: number;
-  };
+  closedAt: Date | null;
+  createdBy: User;
+  assignedTo: User | null;
   evidence?: FileMetadata[];
   notes?: CaseNote[];
+  _count?: {
+    evidence?: number;
+    notes?: number;
+  };
 }
 
 export interface CaseNote {
@@ -342,28 +393,44 @@ export interface CaseStats {
 
 // API interface for case operations
 export const caseService = {
-  // Get all cases with optional filtering
-  getCases: async (params?: {
-    status?: string;
-    userId?: string;
-    assignedToId?: string;
-    limit?: number;
-    offset?: number;
-  }) => {
-    const response = await api.get('/api/cases', { params });
-    
-    // Convert date strings to Date objects
-    const cases = response.data.cases.map((caseItem: any) => ({
-      ...caseItem,
-      createdAt: new Date(caseItem.createdAt),
-      updatedAt: new Date(caseItem.updatedAt),
-      closedAt: caseItem.closedAt ? new Date(caseItem.closedAt) : undefined
-    }));
-    
-    return {
-      ...response.data,
-      cases
-    };
+  // Get all cases
+  getCases: async (options?: { status?: string }) => {
+    console.log('Fetching cases with options:', options);
+    try {
+      const url = '/api/cases' + (options?.status ? `?status=${options.status}` : '');
+      const response = await api.get(url);
+      console.log('Cases response:', response.data);
+      
+      // Ensure we have a consistent response format
+      let result;
+      if (Array.isArray(response.data)) {
+        // If API returns an array, convert to expected object format
+        result = {
+          cases: response.data,
+          total: response.data.length
+        };
+      } else if (response.data && typeof response.data === 'object') {
+        // If API returns an object, ensure it has cases array
+        result = {
+          cases: Array.isArray(response.data.cases) ? response.data.cases : [],
+          total: response.data.total || 0
+        };
+      } else {
+        // Fallback for unexpected responses
+        result = {
+          cases: [],
+          total: 0
+        };
+      }
+      
+      // Log success
+      console.log(`Retrieved ${result.cases.length} cases successfully`);
+      return result;
+    } catch (error) {
+      console.error('Error fetching cases:', error);
+      // Return empty result on error instead of throwing
+      return { cases: [], total: 0 };
+    }
   },
   
   // Get case by ID
