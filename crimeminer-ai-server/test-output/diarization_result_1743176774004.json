@@ -1,0 +1,16 @@
+{
+  "text": "🎵",
+  "segments": [
+    {
+      "id": 0,
+      "start": 0,
+      "end": 3.319999933242798,
+      "text": " 🎵",
+      "confidence": 0.9
+    }
+  ],
+  "language": "english",
+  "duration": 3.239184,
+  "processingTime": 1.422,
+  "audioFile": "/Users/corneliusgeorge/crimev2/CrimeMinerAI/sample-data/sample-audio_41a0b758.mp3"
+}

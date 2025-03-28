@@ -13,7 +13,7 @@
 require('dotenv').config();
 const path = require('path');
 const fs = require('fs');
-const { transcribeAudioWithDiarization, prepareAudioForTranscription } = require('./src/lib/whisper');
+const { transcribeAudioWithDiarization, prepareAudioForTranscription } = require('./dist/lib/whisper');
 
 // Configuration
 const SAMPLE_AUDIO = path.join(__dirname, '../sample-data/sample-audio.mp3');

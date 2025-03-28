@@ -144,7 +144,7 @@ export async function extractEntitiesAndCreateReferences(fileId: string, content
   const lines = content.split('\n');
   
   // Extract entities using the existing AI module
-  const { extractEntities } = await import('./ai');
+  const { extractEntities } = await import('./ai.js');
   const entityResult = await extractEntities(content) as EntityExtractionResult;
   
   const references: Reference[] = [];

@@ -1,0 +1,28 @@
+{
+  "task": "transcribe",
+  "language": "english",
+  "duration": 3.190000057220459,
+  "text": "🎵",
+  "segments": [
+    {
+      "id": 0,
+      "seek": 0,
+      "start": 0,
+      "end": 3.319999933242798,
+      "text": " 🎵",
+      "tokens": [
+        50364,
+        220,
+        172,
+        253,
+        236,
+        113,
+        50530
+      ],
+      "temperature": 0.20000000298023224,
+      "avg_logprob": -1.4417778253555298,
+      "compression_ratio": 0.3333333432674408,
+      "no_speech_prob": 0.377823144197464
+    }
+  ]
+}
